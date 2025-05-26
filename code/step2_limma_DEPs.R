@@ -1,3 +1,6 @@
+# WARNING
+warning("This script is deprecated, please use step2_ranksum_DEPs.R instead.")
+
 # packages and functions ----
 rm(list = ls())
 source("./code/utils.R")

@@ -10,7 +10,7 @@ set.seed(1226)
 ov_s1_randomized <- FALSE
 use_ov_s1_ov_overlap <- TRUE
 output_path <- "./output/step5_PRM_model/"
-DEPs_path <- "./output/step4_PRM_eval/"
+DEPs_path <- "./output/step4_PRM_eval"
 input_exp_file <- "./data/samples/Protein_exp/ratio/ratio_after_QC_corrected.rds"
 PRM_data <- "./output/step4_PRM_eval/PRM_data_filled.rds"
 remove_list <- c()
