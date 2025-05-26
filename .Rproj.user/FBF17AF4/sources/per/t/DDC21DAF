@@ -1,0 +1,26 @@
+{
+    "id": "DDC21DAF",
+    "path": "/Volumes/Tokyo/projects/OvarianProS/code/step1_QC_of_data.R",
+    "project_path": "code/step1_QC_of_data.R",
+    "type": "r_source",
+    "hash": "373628179",
+    "contents": "",
+    "dirty": false,
+    "created": 1747727659668.0,
+    "source_on_save": false,
+    "relative_order": 1,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "20,41",
+        "scrollLine": "135"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1739849762,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1739849762,
+    "read_only": false,
+    "read_only_alternatives": []
+}

@@ -1,0 +1,436 @@
+# packages and functions ----
+rm(list = ls())
+library(caret)
+library(pROC)
+library(PRROC)
+library(patchwork)
+source("./code/utils.R")
+## analysis init settings ----
+set.seed(1226)
+ov_s1_randomized <- FALSE
+use_ov_s1_ov_overlap <- TRUE
+output_path <- "./output/step5_PRM_model/"
+DEPs_path <- "./output/step4_PRM_eval/"
+input_exp_file <- "./data/samples/Protein_exp/ratio/ratio_after_QC_corrected.rds"
+PRM_data <- "./output/step4_PRM_eval/PRM_data_filled.rds"
+remove_list <- c()
+remove_list <- c("CA3", "CA22", "CA23", "CA1", "CA47", "CA53", "CA56", "CA66")
+threshold <- list(0.33, 0.4, NULL, NULL)
+names(threshold) <- c("ov_s1_cys", "ov_cys", "ov_s1_ctrl", "cys_ctrl")
+prc_res_list <- list(NULL, NULL, NULL, NULL)
+names(prc_res_list) <- c("ov_s1_cys", "ov_cys", "ov_s1_ctrl", "cys_ctrl")
+train_control <- trainControl(method = "cv", number = 5, summaryFunction = twoClassSummary, classProbs = T)
+if (!dir.exists(output_path)) {
+  dir.create(output_path)
+}
+
+
+# get DEPs ----
+files <- list.files(DEPs_path, pattern = "^DEPs_.*\\.rds$", full.names = T)
+DEPs <- lapply(files, function(x) {
+  return(readRDS(x))
+})
+names(DEPs) <- lapply(files, function(x) {
+  return(str_replace(str_split_1(str_split_1(x, "/")[4], "\\.")[1], "_compare", ""))
+})
+
+# get data mat ----
+PRM_data <- readRDS(PRM_data)
+k <- rownames(PRM_data) %in% remove_list
+PRM_data <- PRM_data[!k, ]
+colnames(PRM_data)[ncol(PRM_data)] <- "label"
+PRM_data$group <- "EVAL"
+training_data <- readRDS(input_exp_file)
+colnames(training_data)[ncol(training_data) - 1] <- "label"
+training_data$group <- "TRAIN"
+training_data <- training_data %>%
+  select(colnames(PRM_data))
+exp_data <- rbind(training_data, PRM_data)
+
+# get data for ml ----
+ml_data <- vector(mode = "list")
+for (dep_item in names(DEPs)) {
+  dep <- DEPs[[dep_item]]
+  dep <- dep %>%
+    filter(same == TRUE)
+
+  mask <- colnames(exp_data) %in% rownames(dep)
+  mask[length(mask)] <- TRUE
+  mask[length(mask) - 1] <- TRUE
+
+  ml_data[[dep_item]] <- exp_data[, mask]
+}
+
+
+# generate a log
+log_file <- paste0(output_path, "model.log")
+if (file.exists(log_file)) {
+  file.remove(log_file)
+}
+log_appender(appender_file(log_file))
+
+# OV-S1 vs CYS ----
+dep_item <- "DEPs_ov_s1_cys"
+log_info("OV-S1 vs CYS ----")
+# randomize the data
+if (ov_s1_randomized) {
+  ml_data[[dep_item]]$group <- sample(ml_data[[dep_item]]$group)
+}
+# save features
+tmp_feas <- head(colnames(ml_data[[dep_item]]), length(colnames(ml_data[[dep_item]])) - 2)
+write.csv(tmp_feas, paste0(output_path, "feas", '_', dep_item, '.csv'))
+trainingData <- ml_data[[dep_item]][ml_data[[dep_item]]$group == "TRAIN", ] %>%
+  filter(label == "ov_s1" | label == "cys") %>%
+  select(-group)
+trainingData$label <- factor(trainingData$label, levels = c("ov_s1", "cys"))
+testingData <- ml_data[[dep_item]][ml_data[[dep_item]]$group == "EVAL", ] %>%
+  filter(label == "ov_s1" | label == "cys") %>%
+  select(-group)
+tune_grid <- expand.grid(alpha = c(0, 0.5, 1), lambda = seq(0.001, 0.1, length.out = 10))
+model <- train(label ~ ., data = trainingData, method = "glmnet", trControl = train_control, tuneGrid = tune_grid, metric = "Sens")
+predictions <- predict(model, newdata = testingData)
+cm <- confusionMatrix(predictions, factor(testingData$label, levels = c("ov_s1", "cys")))
+metrics <- cm$byClass[c("Sensitivity", "Specificity", "F1", "Precision", "Balanced Accuracy")]
+accuracy <- cm$overall["Accuracy"]
+metrics["Accuracy"] <- accuracy
+log_info(paste0("Sensitivity: ", metrics["Sensitivity"], ", Specificity: ", metrics["Specificity"], ", F1: ", metrics["F1"], ", Precision: ", metrics["Precision"], ", Balanced Accuracy: ", metrics["Balanced Accuracy"], ", Accuracy: ", metrics["Accuracy"]))
+# AUC & AUPRC
+predicted_prob <- predict(model, newdata = testingData, type = "prob")
+predicted_prob <- predicted_prob[, 1]
+roc_curve <- roc(testingData$label, predicted_prob, curve = T)
+auc_value <- auc(roc_curve)
+log_info(paste("AUC:", auc_value))
+# AUPRC
+pr_curve <- pr.curve(scores.class0 = predicted_prob, weights.class0 = as.numeric(testingData$label == "ov_s1"), curve = T)
+auprc_value <- pr_curve$auc.integral
+log_info(paste("AUPRC:", auprc_value))
+# adjust the threshold
+if (!is.null(threshold[["ov_s1_cys"]])) {
+  log_info(paste0("Adjust the threshold to ", threshold[["ov_s1_cys"]]))
+  predicted_prob <- factor(ifelse(predicted_prob > threshold[["ov_s1_cys"]], "ov_s1", "cys"), levels = c("ov_s1", "cys"))
+  cm <- confusionMatrix(predicted_prob, factor(testingData$label, levels = c("ov_s1", "cys")))
+  metrics <- cm$byClass[c("Sensitivity", "Specificity", "F1", "Precision", "Balanced Accuracy")]
+  accuracy <- cm$overall["Accuracy"]
+  metrics["Accuracy"] <- accuracy
+  log_info(paste0("Sensitivity: ", metrics["Sensitivity"], ", Specificity: ", metrics["Specificity"], ", F1: ", metrics["F1"], ", Precision: ", metrics["Precision"], ", Balanced Accuracy: ", metrics["Balanced Accuracy"], ", Accuracy: ", metrics["Accuracy"]))
+}
+# save res_viz
+viz <- cbind(testingData, predicted_prob, predictions)
+write.csv(viz, paste0(output_path, "preds_ov_s1_cys_viz.csv"))
+# ROC
+roc_res_ov_s1_cys <- roc_curve
+p_roc <- ggroc(roc_curve, legacy.axes = TRUE, colour = "red") +
+  geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1),
+    color = "darkgrey", linetype = 4
+  ) +
+  ggtitle("ROC of stage1-OV / CYS model") +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 18),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12)
+  ) +
+  annotate("text", x = 0.75, y = 0.125, label = paste("AUC:", round(auc_value, 2)), size = 6) +
+  annotate("text", x = 0.75, y = 0.25, label = paste("Accuracy:", round(metrics["Accuracy"], 2)), size = 6) +
+  annotate("text", x = 0.75, y = 0.375, label = paste("Balanced Accuracy:", round(metrics["Balanced Accuracy"], 2)), size = 6)
+ggsave(paste0(output_path, "roc_ov_s1_cys.tiff"), p_roc,
+  width = 15, height = 15,
+  units = "cm", dpi = 600
+)
+# PRC
+prc_df <- data.frame(
+  recall = pr_curve$curve[, 1],
+  precision = pr_curve$curve[, 2]
+)
+prc_res_list[["ov_s1_cys"]] <- pr_curve
+p_prc <- ggplot(prc_df, aes(x = recall, y = precision)) +
+  geom_path(color = "red") +
+  geom_segment(aes(x = 0, xend = 1, y = 0, yend = 0),
+    color = "darkgrey", linetype = 4
+  ) +
+  ggtitle("PR Curve of stage1-OV / CYS model") +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 18),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12)
+  ) +
+  annotate("text", x = 0.75, y = 0.125, label = paste("AUPRC:", round(auprc_value, 2)), size = 6) +
+  annotate("text", x = 0.75, y = 0.25, label = paste("Recall:", round(metrics["Sensitivity"], 2)), size = 6) +
+  annotate("text", x = 0.75, y = 0.375, label = paste("Precision:", round(metrics["Precision"], 2)), size = 6) +
+  annotate("text", x = 0.75, y = 0.5, label = paste("F1:", round(metrics["F1"], 2)), size = 6)
+ggsave(paste0(output_path, "prc_ov_s1_cys.tiff"), p_prc,
+  width = 15, height = 15,
+  units = "cm", dpi = 600
+)
+
+# OV vs CYS ----
+dep_item <- "DEPs_ov_cys"
+log_info('=====================================================================')
+log_info("OV vs CYS ----")
+if (use_ov_s1_ov_overlap) {
+  overlap_feas <- intersect(
+    colnames(ml_data$DEPs_ov_s1_cys),
+    colnames(ml_data$DEPs_ov_cys)
+  )
+  ml_data[[dep_item]] <- ml_data[[dep_item]][, overlap_feas]
+  log_info("Use the overlapped features between OV-S1 vs CYS and OV vs CYS.")
+  log_info(paste("The number of overlapped features:", (length(overlap_feas) - 2)))
+}
+# save features
+tmp_feas <- head(colnames(ml_data[[dep_item]]), length(colnames(ml_data[[dep_item]])) - 2)
+write.csv(tmp_feas, paste0(output_path, "feas", '_', dep_item, '.csv'))
+trainingData <- ml_data[[dep_item]][ml_data[[dep_item]]$group == "TRAIN", ] %>%
+  filter(label == "ov" | label == "cys" | label == "ov_s1") %>%
+  select(-group)
+trainingData$label[trainingData$label == "ov_s1"] <- "ov"
+trainingData$label <- factor(trainingData$label, levels = c("ov", "cys"))
+testingData <- ml_data[[dep_item]][ml_data[[dep_item]]$group == "EVAL", ] %>%
+  filter(label == "ov" | label == "cys" | label == "ov_s1") %>%
+  select(-group)
+testingData$label[testingData$label == "ov_s1"] <- "ov"
+tune_grid <- expand.grid(alpha = c(0, 0.5, 1), lambda = seq(0.001, 0.1, length.out = 10))
+model <- train(label ~ ., data = trainingData, method = "glmnet", trControl = train_control, tuneGrid = tune_grid, metric = "Sens")
+predictions <- predict(model, newdata = testingData)
+cm <- confusionMatrix(predictions, factor(testingData$label, levels = c("ov", "cys")))
+metrics <- cm$byClass[c("Sensitivity", "Specificity", "F1", "Precision", "Balanced Accuracy")]
+accuracy <- cm$overall["Accuracy"]
+metrics["Accuracy"] <- accuracy
+log_info(paste0("Sensitivity: ", metrics["Sensitivity"], ", Specificity: ", metrics["Specificity"], ", F1: ", metrics["F1"], ", Precision: ", metrics["Precision"], ", Balanced Accuracy: ", metrics["Balanced Accuracy"], ", Accuracy: ", metrics["Accuracy"]))
+# AUC & AUPRC
+predicted_prob <- predict(model, newdata = testingData, type = "prob")
+predicted_prob <- predicted_prob[, 1]
+roc_curve <- roc(testingData$label, predicted_prob, curve = T)
+auc_value <- auc(roc_curve)
+log_info(paste("AUC:", auc_value))
+# AUPRC
+pr_curve <- pr.curve(scores.class0 = predicted_prob, weights.class0 = as.numeric(testingData$label == "ov"), curve = T)
+auprc_value <- pr_curve$auc.integral
+log_info(paste("AUPRC:", auprc_value))
+# adjust the threshold
+if (!is.null(threshold[["ov_cys"]])) {
+  log_info(paste0("Adjust the threshold to ", threshold[["ov_cys"]]))
+  predicted_prob <- factor(ifelse(predicted_prob > threshold[["ov_cys"]], "ov", "cys"), levels = c("ov", "cys"))
+  cm <- confusionMatrix(predicted_prob, factor(testingData$label, levels = c("ov", "cys")))
+  metrics <- cm$byClass[c("Sensitivity", "Specificity", "F1", "Precision", "Balanced Accuracy")]
+  accuracy <- cm$overall["Accuracy"]
+  metrics["Accuracy"] <- accuracy
+  log_info(paste0("Sensitivity: ", metrics["Sensitivity"], ", Specificity: ", metrics["Specificity"], ", F1: ", metrics["F1"], ", Precision: ", metrics["Precision"], ", Balanced Accuracy: ", metrics["Balanced Accuracy"], ", Accuracy: ", metrics["Accuracy"]))
+}
+# save res_viz
+viz <- cbind(testingData, predicted_prob, predictions)
+write.csv(viz, paste0(output_path, "preds_ov_cys_viz.csv"))
+# ROC
+roc_res_ov_cys <- roc_curve
+p_roc <- ggroc(roc_curve, legacy.axes = TRUE, colour = "red") +
+  geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1),
+    color = "darkgrey", linetype = 4
+  ) +
+  ggtitle("ROC of OV / CYS model") +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 18),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12)
+  ) +
+  annotate("text", x = 0.75, y = 0.125, label = paste("AUC:", round(auc_value, 2)), size = 6) +
+  annotate("text", x = 0.75, y = 0.25, label = paste("Accuracy:", round(metrics["Accuracy"], 2)), size = 6) +
+  annotate("text", x = 0.75, y = 0.375, label = paste("Balanced Accuracy:", round(metrics["Balanced Accuracy"], 2)), size = 6)
+ggsave(paste0(output_path, "roc_ov_cys.tiff"), p_roc,
+  width = 15, height = 15,
+  units = "cm", dpi = 600
+)
+# PRC
+prc_df <- data.frame(
+  recall = pr_curve$curve[, 1],
+  precision = pr_curve$curve[, 2]
+)
+prc_res_list[["ov_cys"]] <- pr_curve
+p_prc <- ggplot(prc_df, aes(x = recall, y = precision)) +
+  geom_path(color = "red") +
+  geom_segment(aes(x = 0, xend = 1, y = 0, yend = 0),
+    color = "darkgrey", linetype = 4
+  ) +
+  ggtitle("PR Curve of OV / CYS model") +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 18),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12)
+  ) +
+  annotate("text", x = 0.75, y = 0.125, label = paste("AUPRC:", round(auprc_value, 2)), size = 6) +
+  annotate("text", x = 0.75, y = 0.25, label = paste("Recall:", round(metrics["Sensitivity"], 2)), size = 6) +
+  annotate("text", x = 0.75, y = 0.375, label = paste("Precision:", round(metrics["Precision"], 2)), size = 6) +
+  annotate("text", x = 0.75, y = 0.5, label = paste("F1:", round(metrics["F1"], 2)), size = 6)
+ggsave(paste0(output_path, "prc_ov_cys.tiff"), p_prc,
+  width = 15, height = 15,
+  units = "cm", dpi = 600
+)
+
+# OV-S1 vs CTRL ----
+dep_item <- "DEPs_ov_s1_ctrl"
+log_info('=====================================================================')
+log_info("OV-S1 vs CTRL ----")
+# randomize the data
+if (ov_s1_randomized) {
+  ml_data[[dep_item]]$group <- sample(ml_data[[dep_item]]$group)
+}
+# save features
+tmp_feas <- head(colnames(ml_data[[dep_item]]), length(colnames(ml_data[[dep_item]])) - 2)
+write.csv(tmp_feas, paste0(output_path, "feas", '_', dep_item, '.csv'))
+trainingData <- ml_data[[dep_item]][ml_data[[dep_item]]$group == "TRAIN", ] %>%
+  filter(label == "ov_s1" | label == "ctrl") %>%
+  select(-group)
+trainingData$label <- factor(trainingData$label, levels = c("ov_s1", "ctrl"))
+testingData <- ml_data[[dep_item]][ml_data[[dep_item]]$group == "EVAL", ] %>%
+  filter(label == "ov_s1" | label == "ctrl") %>%
+  select(-group)
+tune_grid <- expand.grid(alpha = c(0, 0.5, 1), lambda = seq(0.001, 0.1, length.out = 10))
+model <- train(label ~ ., data = trainingData, method = "glmnet", trControl = train_control, tuneGrid = tune_grid, metric = "Sens")
+predictions <- predict(model, newdata = testingData)
+cm <- confusionMatrix(predictions, factor(testingData$label, levels = c("ov_s1", "ctrl")))
+metrics <- cm$byClass[c("Sensitivity", "Specificity", "F1", "Precision", "Balanced Accuracy")]
+accuracy <- cm$overall["Accuracy"]
+metrics["Accuracy"] <- accuracy
+log_info(paste0("Sensitivity: ", metrics["Sensitivity"], ", Specificity: ", metrics["Specificity"], ", F1: ", metrics["F1"], ", Precision: ", metrics["Precision"], ", Balanced Accuracy: ", metrics["Balanced Accuracy"], ", Accuracy: ", metrics["Accuracy"]))
+# AUC & AUPRC
+predicted_prob <- predict(model, newdata = testingData, type = "prob")
+predicted_prob <- predicted_prob[, 1]
+roc_curve <- roc(testingData$label, predicted_prob, curve = T)
+auc_value <- auc(roc_curve)
+log_info(paste("AUC:", auc_value))
+# AUPRC
+pr_curve <- pr.curve(scores.class0 = predicted_prob, weights.class0 = as.numeric(testingData$label == "ov_s1"), curve = T)
+auprc_value <- pr_curve$auc.integral
+log_info(paste("AUPRC:", auprc_value))
+# save res_viz
+viz <- cbind(testingData, predicted_prob, predictions)
+write.csv(viz, paste0(output_path, "preds_ov_s1_ctrl_viz.csv"))
+png(paste0(output_path, "roc_ov_s1_ctrl.png"))
+plot(roc_curve, main = "ROC curve of OV-S1 vs CTRL", print.auc = T)
+dev.off()
+png(paste0(output_path, "pr_ov_s1_ctrl.png"))
+plot(pr_curve, main = "PR curve of OV-S1 vs CTRL")
+dev.off()
+
+# CYS vs CTRL ----
+dep_item <- "DEPs_cys_ctrl"
+log_info('=====================================================================')
+log_info("CYS vs CTRL ----")
+# save features
+tmp_feas <- head(colnames(ml_data[[dep_item]]), length(colnames(ml_data[[dep_item]])) - 2)
+write.csv(tmp_feas, paste0(output_path, "feas", '_', dep_item, '.csv'))
+trainingData <- ml_data[[dep_item]][ml_data[[dep_item]]$group == "TRAIN", ] %>%
+  filter(label == "cys" | label == "ctrl") %>%
+  select(-group)
+trainingData$label <- factor(trainingData$label, levels = c("cys", "ctrl"))
+testingData <- ml_data[[dep_item]][ml_data[[dep_item]]$group == "EVAL", ] %>%
+  filter(label == "cys" | label == "ctrl") %>%
+  select(-group)
+tune_grid <- expand.grid(alpha = c(0, 0.5, 1), lambda = seq(0.001, 0.1, length.out = 10))
+model <- train(label ~ ., data = trainingData, method = "glmnet", trControl = train_control, tuneGrid = tune_grid)
+predictions <- predict(model, newdata = testingData)
+cm <- confusionMatrix(predictions, factor(testingData$label, levels = c("cys", "ctrl")))
+metrics <- cm$byClass[c("Sensitivity", "Specificity", "F1", "Precision", "Balanced Accuracy")]
+accuracy <- cm$overall["Accuracy"]
+metrics["Accuracy"] <- accuracy
+log_info(paste0("Sensitivity: ", metrics["Sensitivity"], ", Specificity: ", metrics["Specificity"], ", F1: ", metrics["F1"], ", Precision: ", metrics["Precision"], ", Balanced Accuracy: ", metrics["Balanced Accuracy"], ", Accuracy: ", metrics["Accuracy"]))
+# AUC & AUPRC
+predicted_prob <- predict(model, newdata = testingData, type = "prob")
+predicted_prob <- predicted_prob[, 1]
+roc_curve <- roc(testingData$label, predicted_prob, curve = T)
+auc_value <- auc(roc_curve)
+log_info(paste("AUC:", auc_value))
+# AUPRC
+pr_curve <- pr.curve(scores.class0 = predicted_prob, weights.class0 = as.numeric(testingData$label == "cys"), curve = T)
+auprc_value <- pr_curve$auc.integral
+log_info(paste("AUPRC:", auprc_value))
+# save res_viz
+viz <- cbind(testingData, predicted_prob, predictions)
+write.csv(viz, paste0(output_path, "preds_cys_ctrl_viz.csv"))
+png(paste0(output_path, "roc_cys_ctrl.png"))
+plot(roc_curve, main = "ROC curve of CYS vs CTRL", print.auc = T)
+dev.off()
+png(paste0(output_path, "pr_cys_ctrl.png"))
+plot(pr_curve, main = "PR curve of CYS vs CTRL")
+dev.off()
+
+# Mix plot ----
+# ROC
+roc_list <- list(roc_res_ov_s1_cys, roc_res_ov_cys)
+names(roc_list) <- c("stage1-OV / CYS", "OV / CYS")
+mix_roc <- ggroc(roc_list,
+                 legacy.axes = TRUE) +
+  ggsci::scale_color_lancet() +
+  geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1),
+    color = "darkgrey", linetype = 4
+  ) +
+  ggtitle("") +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 18),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12),
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 12),
+    # legend.position = "none"
+  )
+metric_df <- data.frame(
+  AUC = c(0.973, 0.963),
+  Acc = c(0.957, 0.908),
+  BAC = c(0.906, 0.898)
+)
+rownames(metric_df) <- c("s1-OV / CYS", "OV / CYS")
+mix_roc <- mix_roc / gridExtra::tableGrob(metric_df)
+ggsave(paste0(output_path, "mix_roc.tiff"), mix_roc, units = "cm",
+       width = 15, height = 17, dpi = 600)
+# PRC
+prc_mix_df <- data.frame(
+  recall = prc_res_list[["ov_cys"]]$curve[, 1],
+  precision = prc_res_list[["ov_cys"]]$curve[, 2]
+)
+prc_mix_df$Model <- "OV / CYS"
+prc_mix_df <- rbind(prc_mix_df, data.frame(
+  recall = prc_res_list[["ov_s1_cys"]]$curve[, 1],
+  precision = prc_res_list[["ov_s1_cys"]]$curve[, 2],
+  Model = "stage1-OV / CYS"
+))
+prc_mix_df$Model <- factor(prc_mix_df$Model,
+                           levels = c("stage1-OV / CYS", "OV / CYS"))
+mix_prc <- ggplot(prc_mix_df, aes(x = recall, y = precision, color = Model)) +
+  geom_path() +
+  geom_segment(aes(x = 0, xend = 1, y = 0, yend = 0),
+    color = "darkgrey", linetype = 4
+  ) +
+  ggsci::scale_color_lancet() +
+  ggtitle("") +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 18),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12),
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 12)
+  )
+metric_df <- data.frame(
+  AUPRC = c(0.924, paste0(0.960, '0')),
+  Recall = c(0.833, 0.827),
+  Precision = c(0.882, 0.954),
+  F1 = c(0.857, 0.886)
+)
+rownames(metric_df) <- c("s1-OV / CYS", "OV / CYS")
+mix_prc <- mix_prc / gridExtra::tableGrob(metric_df)
+ggsave(paste0(output_path, "mix_prc.tiff"), mix_prc, units = "cm",
+       width = 15, height = 17, dpi = 600)
+# final mix plot
+mix_roc <- mix_roc
+mix_plot <- mix_roc / mix_prc
+ggsave(paste0(output_path, "mix_plot.tiff"), mix_plot, units = "cm",
+       width = 25, height = 25, dpi = 600)
+
+
+# checkpoint ----
+save.image("./data/analysis_check_point/step5_PRM_model.RData")
+rm(list = ls())

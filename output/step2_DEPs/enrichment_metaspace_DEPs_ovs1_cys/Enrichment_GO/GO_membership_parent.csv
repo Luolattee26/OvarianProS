@@ -1,0 +1,18 @@
+_MEMBER_hits,_LogP_hits,GO,Description,_PATTERN_,_RANK_,CHILD_GO_hits
+1,-27.776434785456864,GO:0009987,cellular process,M1,1,GO:0030036 actin cytoskeleton organization
+1,-17.610552556135264,GO:0032501,multicellular organismal process,M1,1,GO:0070527 platelet aggregation
+1,-16.995415424859175,GO:0050896,response to stimulus,M1,1,GO:0009611 response to wounding
+1,-16.647204558765225,GO:0098754,detoxification,M1,1,GO:0098869 cellular oxidant detoxification
+1,-15.355764500985225,GO:0065007,biological regulation,M1,1,GO:0007599 hemostasis
+1,-11.494704177820804,GO:0002376,immune system process,M1,1,GO:0006959 humoral immune response
+1,-11.23676275422518,GO:0044419,biological process involved in interspecies interaction between organisms,M1,1,GO:0009617 response to bacterium
+1,-10.801436630879607,GO:0050789,regulation of biological process,M1,1,GO:0008064 regulation of actin polymerization or depolymerization
+1,-8.412617782193529,GO:0051179,localization,M1,1,GO:0015669 gas transport
+1,-7.566707577459025,GO:0040011,locomotion,M1,1,GO:0071621 granulocyte chemotaxis
+1,-6.547883437843156,GO:0048518,positive regulation of biological process,M1,1,GO:1900026 positive regulation of substrate adhesion-dependent cell spreading
+1,-6.368151521981945,GO:0032502,developmental process,M1,1,GO:0021762 substantia nigra development
+1,-6.273301624852023,GO:0042592,homeostatic process,M1,1,GO:0019725 cellular homeostasis
+1,-4.014729665398135,GO:0048519,negative regulation of biological process,M1,1,GO:1902904 negative regulation of supramolecular fiber organization
+1,-2.9114263268764065,GO:0022414,reproductive process,M1,1,GO:2000242 negative regulation of reproductive process
+1,-2.8860593387231273,GO:0040007,growth,M1,1,GO:0045927 positive regulation of growth
+1,-2.0978304375260315,GO:0016032,viral process,M1,1,GO:0048524 positive regulation of viral process
