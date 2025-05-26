@@ -1,2 +1,2 @@
 # OvarianProS
- LLLAB Ovarian Cancer Proteomics Data Analysis Program
+ LLLab Ovarian Cancer Proteomics Data Analysis Program
