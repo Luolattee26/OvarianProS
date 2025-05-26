@@ -3,3 +3,5 @@
 **/*.tiff
 .Rproj.user
 **/*.zip
+**/.RData
+**/.Rhistory
