@@ -91,7 +91,7 @@ save_folder <- paste(output_path, "/", sep = "")
 if (!dir.exists(save_folder)) {
   dir.create(save_folder)
 }
-ggsave(paste(output_path, "/", "CV_boxplot.tiff", sep = ""), height = 10, width = 10, dpi = 600, units = "cm")
+ggsave(paste(output_path, "/", "CV_boxplot.tiff", sep = ""), height = 10, width = 10, dpi = 300, units = "cm")
 
 ## QC: corr calculate ---- Correlation between pool samples Don't use unfilled data for corr calculation
 cor_res <- rcorr(as.matrix(pool_abundance_filled[, -remaining_cols][, paste0("pool", 1:22)]), type = "spearman")
@@ -130,7 +130,7 @@ save_folder <- paste(output_path, "/", sep = "")
 if (!dir.exists(save_folder)) {
   dir.create(save_folder)
 }
-ggsave(paste(output_path, "/", "corr_dot_plot.tiff", sep = ""), width = 22, height = 20, units = "cm", dpi = 600)
+ggsave(paste(output_path, "/", "corr_dot_plot.tiff", sep = ""), width = 22, height = 20, units = "cm", dpi = 300)
 
 ## QC: batch effect ----
 raw_ratio <- read.csv("./data/samples/Protein_exp/ratio/ratio_protein_MD.tsv", sep = "\t") %>%
